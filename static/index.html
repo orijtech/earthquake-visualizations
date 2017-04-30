@@ -1,0 +1,147 @@
+<HTML>
+  <head>
+    <script>
+
+      try {
+	var title = "{{.Period}}";
+	const unsetRedirectRoute = '/visual?dur=7d';
+
+	// Hasn't been rendered by the template!
+	if (title.search("{" + "{") === 0)
+	  window.location = unsetRedirectRoute;
+      } catch(ex) {
+	// Redirect to the search route
+	window.location = unsetRedirectRoute;
+      }
+
+
+    </script>
+
+    <title>{{.Period}}</title>
+
+    <script src='https://api.mapbox.com/mapbox.js/v3.1.0/mapbox.js'></script>
+    <link href='https://api.mapbox.com/mapbox.js/v3.1.0/mapbox.css' rel='stylesheet' />
+
+    <style>
+      body { margin:0; padding:0; }
+      #map { position:absolute; top:0; bottom:0; width:100%; }
+
+      .info {
+	padding: 6px 8px;
+	font: 14px/16px Arial, Helvetica, sans-serif;
+	background: white;
+	background: rgba(255,255,255,0.8);
+	box-shadow: 0 0 15px rgba(0,0,0,0.2);
+	border-radius: 5px;
+      }
+      
+      .info h4 {
+	margin: 0 0 5px;
+	color: #777;
+      }
+
+      .legend {
+	line-height: 18px;
+	color: #555;
+      }
+
+      .legend i {
+	width: 18px;
+	height: 18px;
+	float: left;
+	margin-right: 8px;
+	opacity: 0.7;
+      }
+    </style>
+
+    <script>
+      function addMarkerForCentroid(cent) {
+	var color = cent.color;
+	var cur = cent.centroid;
+	var properties = cur.properties;
+	var detail = properties.place;
+	var coords = cur.geometry.coordinates;
+	var depth = coords.depth;
+	var magnitude = cur.properties.mag;
+
+	var loc = [coords.latitude, coords.longitude];
+	L.marker(loc, {
+	  icon: L.mapbox.marker.icon({
+	    'marker-size': 'large',
+	    'marker-color': color,
+	    'marker-description': 'centroid',
+	  }),
+	})
+	.bindPopup('<div>Magnitude: ' + magnitude + '</div><br /><div>Depth: ' + depth + '</div><br /><div class="trigger">' + detail +
+	  '</div><br /><div>View details about it <a target="_blank" href="' + properties.url + '">here</a>')
+	.addTo(map);
+
+	// Then make a marker for each point under that centroid.
+	cent.points.forEach(function(point) {
+	  addMarker(point, color);
+	});
+      }
+      
+      function addMarker(point, color) {
+	var coords = point.geometry.coordinates;
+	var depth = coords.depth;
+	var detail = point.properties.place;
+	var magnitude = point.properties.mag;
+	var url = point.properties.url;
+
+	var loc = [coords.latitude, coords.longitude];
+	L.marker(loc, {
+	  icon: L.mapbox.marker.icon({
+	    'marker-size': 'small',
+	    'marker-color': color,
+	  }),
+	})
+	.bindPopup('<div>Magnitude: ' + magnitude + '</div><br /><div>Depth: ' + depth + '</div><br /><div class="trigger">' + detail +
+	  '</div><br /><div>View details about it <a target="_blank" href="' + url + '">here</a>')
+	.addTo(map);
+      }
+    </script>
+
+    <script>
+      (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+	(i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+	  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+      })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+      ga('create', 'UA-98325447-1', 'auto');
+      ga('send', 'pageview');
+    </script>
+  </head>
+
+  <body>
+    <div id="map"></div>
+
+    <script>
+      L.mapbox.accessToken = 'pk.eyJ1Ijoib2Rla2UtZW0iLCJhIjoiY2l5dGZma2djMDAxNjJwcGQwNDRsZzJhayJ9.H3wRNSHlL9rCTEzuGmGyGg';
+      var centroidList = {{.Elements}};
+      var map = L.mapbox.map('map', 'mapbox.streets');
+      for (var i=0; i < centroidList.length; i++) {
+	var cur = centroidList[i];
+	addMarkerForCentroid(cur);
+      }
+
+      var legend = L.control({'position': 'bottomright'});
+      legend.onAdd = function(map) {
+	var div = L.DomUtil.create('div', 'info legend');
+	div.innerHTML += '<div>Magnitude Centroids</div>';
+	var legendMap = {{.LegendMap}};
+
+	for (var i=0; i < centroidList.length; i++) {
+	  var centroid = centroidList[i];
+	  var color   = centroid.color;
+	  var magnitude = legendMap[color];
+	  div.innerHTML += '<i style="background:' + color + '"></i> ~' + magnitude + '<br />';
+	}
+
+	return div;
+      };
+
+      legend.addTo(map);
+    </script>
+  </body>
+</HTML>
