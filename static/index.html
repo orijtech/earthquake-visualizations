@@ -56,6 +56,9 @@
 
     <script>
       function addMarkerForCentroid(cent) {
+	if (!cent)
+	  return;
+
 	var color = cent.color;
 	var cur = cent.centroid;
 	var properties = cur.properties;
@@ -72,17 +75,22 @@
 	    'marker-description': 'centroid',
 	  }),
 	})
-	.bindPopup('<div>Magnitude: ' + magnitude + '</div><br /><div>Depth: ' + depth + '</div><br /><div class="trigger">' + detail +
-	  '</div><br /><div>View details about it <a target="_blank" href="' + properties.url + '">here</a>')
+	.bindPopup('<div>Magnitude: ' + magnitude + '</div><div>Depth: ' + depth + '</div><div class="trigger">' + detail + '</div>' +
+	  '<div>View details about it <a target="_blank" href="' + properties.url + '">here</a>')
 	.addTo(map);
 
-	// Then make a marker for each point under that centroid.
-	cent.points.forEach(function(point) {
-	  addMarker(point, color);
-	});
+	if (cent.points && cent.points.length > 0) {
+	  // Then make a marker for each point under that centroid.
+	  cent.points.forEach(function(point) {
+	    addMarker(point, color);
+	  });
+	}
       }
       
       function addMarker(point, color) {
+	if (!point)
+	  return;
+
 	var coords = point.geometry.coordinates;
 	var depth = coords.depth;
 	var detail = point.properties.place;
@@ -96,8 +104,8 @@
 	    'marker-color': color,
 	  }),
 	})
-	.bindPopup('<div>Magnitude: ' + magnitude + '</div><br /><div>Depth: ' + depth + '</div><br /><div class="trigger">' + detail +
-	  '</div><br /><div>View details about it <a target="_blank" href="' + url + '">here</a>')
+	.bindPopup('<div>Magnitude: ' + magnitude + '</div><div>Depth: ' + depth + '</div><div class="trigger">' + detail + '</div>' +
+	  '<div>View details about it <a target="_blank" href="' + url + '">here</a>')
 	.addTo(map);
       }
     </script>

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,12 +12,13 @@ import (
 	"sort"
 	"time"
 
+	"golang.org/x/crypto/acme/autocert"
+
 	"github.com/orijtech/otils"
 
+	expirable "github.com/odeke-em/cache"
 	"github.com/odeke-em/kmeans"
 	"github.com/odeke-em/usgs"
-
-	"golang.org/x/crypto/acme/autocert"
 )
 
 var errUnimplemented = errors.New("unimplemented")
@@ -101,14 +103,22 @@ type render struct {
 	LegendMap map[string]float32
 }
 
+var usgsPeriodToTimeDuration = map[usgs.Period]time.Duration{
+	usgs.Past30Days: 30 * day,
+	usgs.Past7Days:  7 * day,
+	usgs.PastDay:    1 * day,
+	usgs.PastHour:   1 * time.Hour,
+}
+
 func searchAndRender(rw http.ResponseWriter, req *http.Request) {
 	query := req.URL.Query()
-	period, err := durationLevel(query.Get("dur"))
+	usgsPeriod, err := durationLevel(query.Get("dur"))
 	if err != nil {
-		period = usgs.Past7Days
+		usgsPeriod = usgs.Past7Days
 	}
+
 	ureq := &usgs.Request{
-		Period:    period,
+		Period:    usgsPeriod,
 		Magnitude: usgs.MAll,
 	}
 	elems, err := lookupEarthquakes(ureq)
@@ -129,7 +139,7 @@ func searchAndRender(rw http.ResponseWriter, req *http.Request) {
 	})
 
 	rd := &render{
-		Period:    fmt.Sprintf("Earthquakes in the past %s", period),
+		Period:    fmt.Sprintf("Earthquakes in the past %s", usgsPeriod),
 		Elements:  elems,
 		LegendMap: legendMap,
 	}
@@ -164,7 +174,76 @@ func minOf(args ...int) int {
 	return min
 }
 
+var expiryCache = expirable.New()
+
+type dumpElementCacheExpirable struct {
+	elems      []*DumpElement
+	expiryTime time.Time
+}
+
+var _ expirable.Expirable = (*dumpElementCacheExpirable)(nil)
+
+func (dec *dumpElementCacheExpirable) Expired(now time.Time) bool {
+	return now.After(dec.expiryTime)
+}
+
+func (dec *dumpElementCacheExpirable) Value() interface{} {
+	return dec.elems
+}
+
+type asyncClusters struct {
+	err   error
+	elems []*DumpElement
+}
+
+func asyncLookupEarthquakes(usgsReq *usgs.Request) chan *asyncClusters {
+	cChan := make(chan *asyncClusters)
+	go func() {
+		defer close(cChan)
+		elems, err := _lookupEarthquakes(usgsReq)
+		cChan <- &asyncClusters{err: err, elems: elems}
+	}()
+
+	return cChan
+}
+
+var maxDeadline = 15 * time.Second
+var errTimedOut = errors.New("😢 timed out!")
+
 func lookupEarthquakes(usgsReq *usgs.Request) ([]*DumpElement, error) {
+	retr, ok := expiryCache.Get(usgsReq.Period)
+	if ok {
+		dumpSave := retr.(*dumpElementCacheExpirable)
+		return dumpSave.elems, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), maxDeadline)
+	defer cancel()
+
+	var cluster *asyncClusters
+
+	select {
+	case cluster = <-asyncLookupEarthquakes(usgsReq):
+	case <-ctx.Done():
+		return nil, errTimedOut
+	}
+
+	// Otherwise a cache miss
+	clusteredElems, err := cluster.elems, cluster.err
+	if err != nil {
+		return nil, err
+	}
+
+	// Time to cache the results for the period of validity
+	timeDuration := usgsPeriodToTimeDuration[usgsReq.Period]
+	expiryPeriod := time.Now().Add(timeDuration>>1) // Divide the time by half to arbitrarily have refreshing
+	deSave := &dumpElementCacheExpirable{clusteredElems, expiryPeriod}
+	expiryCache.Put(usgsReq.Period, deSave)
+
+	return clusteredElems, nil
+}
+
+func _lookupEarthquakes(usgsReq *usgs.Request) ([]*DumpElement, error) {
 	usgsResp, err := client.Request(usgsReq)
 	if err != nil {
 		return nil, err
