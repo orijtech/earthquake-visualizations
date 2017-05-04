@@ -43,13 +43,11 @@ func (f *feature) Signature() interface{} {
 	return f.memoizedSignature
 }
 
-func (f *feature) Len() int { return 2 }
+func (f *feature) Len() int { return 1 }
 func (f *feature) Dimension(i int) (interface{}, error) {
 	switch i {
 	case 0:
 		return f.Properties.Magnitude, nil
-	case 1:
-		return f.Geometry.Coordinates.Depth, nil
 	default:
 		return nil, errUnimplemented
 	}
@@ -103,10 +101,10 @@ type render struct {
 	LegendMap map[string]float32
 }
 
-var usgsPeriodToTimeDuration = map[usgs.Period]time.Duration{
-	usgs.Past30Days: 30 * day,
-	usgs.Past7Days:  7 * day,
-	usgs.PastDay:    1 * day,
+var cacheableTimeDurations = map[usgs.Period]time.Duration{
+	usgs.Past30Days: 1 * day, // Make a sliding window
+	usgs.Past7Days:  1 * day,
+	usgs.PastDay:    6 * time.Hour,
 	usgs.PastHour:   1 * time.Hour,
 }
 
@@ -235,8 +233,8 @@ func lookupEarthquakes(usgsReq *usgs.Request) ([]*DumpElement, error) {
 	}
 
 	// Time to cache the results for the period of validity
-	timeDuration := usgsPeriodToTimeDuration[usgsReq.Period]
-	expiryPeriod := time.Now().Add(timeDuration>>1) // Divide the time by half to arbitrarily have refreshing
+	timeDuration := cacheableTimeDurations[usgsReq.Period]
+	expiryPeriod := time.Now().Add(timeDuration)
 	deSave := &dumpElementCacheExpirable{clusteredElems, expiryPeriod}
 	expiryCache.Put(usgsReq.Period, deSave)
 
