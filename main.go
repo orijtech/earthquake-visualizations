@@ -43,13 +43,11 @@ func (f *feature) Signature() interface{} {
 	return f.memoizedSignature
 }
 
-func (f *feature) Len() int { return 2 }
+func (f *feature) Len() int { return 1 }
 func (f *feature) Dimension(i int) (interface{}, error) {
 	switch i {
 	case 0:
 		return f.Properties.Magnitude, nil
-	case 1:
-		return f.Geometry.Coordinates.Depth, nil
 	default:
 		return nil, errUnimplemented
 	}
@@ -103,10 +101,10 @@ type render struct {
 	LegendMap map[string]float32
 }
 
-var usgsPeriodToTimeDuration = map[usgs.Period]time.Duration{
-	usgs.Past30Days: 30 * day,
-	usgs.Past7Days:  7 * day,
-	usgs.PastDay:    1 * day,
+var cacheableTimeDurations = map[usgs.Period]time.Duration{
+	usgs.Past30Days: 1 * day, // Make a sliding window
+	usgs.Past7Days:  1 * day,
+	usgs.PastDay:    6 * time.Hour,
 	usgs.PastHour:   1 * time.Hour,
 }
 
@@ -196,25 +194,15 @@ type asyncClusters struct {
 	elems []*DumpElement
 }
 
-func asyncLookupEarthquakes(usgsReq *usgs.Request) chan *asyncClusters {
-	cChan := make(chan *asyncClusters)
-	go func() {
-		defer close(cChan)
-		elems, err := _lookupEarthquakes(usgsReq)
-		cChan <- &asyncClusters{err: err, elems: elems}
-	}()
-
-	return cChan
-}
-
-var maxDeadline = 15 * time.Second
-var errTimedOut = errors.New("😢 timed out!")
-
 func lookupEarthquakes(usgsReq *usgs.Request) ([]*DumpElement, error) {
-	retr, ok := expiryCache.Get(usgsReq.Period)
-	if ok {
-		dumpSave := retr.(*dumpElementCacheExpirable)
-		return dumpSave.elems, nil
+	asyncLookup := func(ureq *usgs.Request) chan *asyncClusters {
+		cChan := make(chan *asyncClusters)
+		go func() {
+			defer close(cChan)
+			elems, err := doLookupThenCache(ureq)
+			cChan <- &asyncClusters{err: err, elems: elems}
+		}()
+		return cChan
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), maxDeadline)
@@ -223,22 +211,36 @@ func lookupEarthquakes(usgsReq *usgs.Request) ([]*DumpElement, error) {
 	var cluster *asyncClusters
 
 	select {
-	case cluster = <-asyncLookupEarthquakes(usgsReq):
+	case cluster = <-asyncLookup(usgsReq):
 	case <-ctx.Done():
 		return nil, errTimedOut
 	}
 
+	return cluster.elems, cluster.err
+}
+
+var maxDeadline = 30 * time.Second
+var errTimedOut = errors.New("😢 timed out!")
+
+func doLookupThenCache(usgsReq *usgs.Request) ([]*DumpElement, error) {
+	retr, ok := expiryCache.Get(usgsReq.Period)
+	if ok {
+		dumpSave := retr.(*dumpElementCacheExpirable)
+		return dumpSave.elems, nil
+	}
+
 	// Otherwise a cache miss
-	clusteredElems, err := cluster.elems, cluster.err
+	clusteredElems, err := _lookupEarthquakes(usgsReq)
 	if err != nil {
 		return nil, err
 	}
 
 	// Time to cache the results for the period of validity
-	timeDuration := usgsPeriodToTimeDuration[usgsReq.Period]
-	expiryPeriod := time.Now().Add(timeDuration>>1) // Divide the time by half to arbitrarily have refreshing
+	timeDuration := cacheableTimeDurations[usgsReq.Period]
+	expiryPeriod := time.Now().Add(timeDuration)
 	deSave := &dumpElementCacheExpirable{clusteredElems, expiryPeriod}
 	expiryCache.Put(usgsReq.Period, deSave)
+	log.Printf("Performed cache set: %#v for period: %v", usgsReq, timeDuration)
 
 	return clusteredElems, nil
 }
